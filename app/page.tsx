@@ -8,73 +8,86 @@ export default function WakeUpPage() {
   const router = useRouter();
   const supabase = createClient();
   
-  // 状态管理
-  const [userNickname, setUserNickname] = useState("");
+  const [userNickname, setUserNickname] = useState("朋友");
   const [status, setStatus] = useState("准备好开启新的一天了吗？");
   const [hasWoken, setHasWoken] = useState(false);
   const [chartData, setChartData] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isLoggedIn, setIsLoggedIn] = useState(false);
 
-  // 1. 获取最近 7 天的真实打卡记录并格式化
+  // 获取中国当前日期的辅助函数 (YYYY-MM-DD)
+  const getChinaDate = () => {
+    return new Intl.DateTimeFormat('zh-Hans-CN', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date()).replace(/\//g, '-');
+  };
+
+  // 1. 获取最近 7 天的打卡记录
   const fetchLogs = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return;
 
-    const { data, error } = await supabase
+    const { data } = await supabase
       .from('wake_up_logs')
       .select('wake_time, wake_date')
-      .order('wake_time', { ascending: true })
+      .order('wake_time', { ascending: false }) // 按最新时间排序
       .limit(7);
 
     if (data) {
       const formatted = data.map((log) => {
+        // 将 UTC 时间转为中国时间字符串进行小时提取
         const date = new Date(log.wake_time);
+        const chinaTimeStr = date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+        const hour = parseInt(chinaTimeStr.split(' ')[1].split(':')[0]);
+        const minute = parseInt(chinaTimeStr.split(':')[1]);
+        
         return {
-          day: date.toLocaleDateString('zh-CN', { weekday: 'short' }),
-          // 转为小时数字，例如 7:30 转为 7.5，用于坐标轴绘制
-          time: parseFloat((date.getHours() + date.getMinutes() / 60).toFixed(2))
+          day: new Date(log.wake_date).toLocaleDateString('zh-CN', { weekday: 'short' }),
+          time: parseFloat((hour + minute / 60).toFixed(2))
         };
-      });
+      }).reverse(); // 转回正序用于图表显示
+      
       setChartData(formatted);
       
-      // 检查今天是否已经打过卡
-      const todayDate = new Date().toISOString().split('T')[0];
-      const alreadyWoken = data.some(log => log.wake_date === todayDate);
+      // 使用中国时区日期判断今天是否已打卡
+      const todayInChina = getChinaDate();
+      const alreadyWoken = data.some(log => log.wake_date === todayInChina);
       setHasWoken(alreadyWoken);
-      if (alreadyWoken) setStatus(`早安，${user.user_metadata.full_name}！今日打卡已完成。`);
+      if (alreadyWoken) setStatus(`早安！今日打卡已完成。`);
     }
   };
 
-  // 2. 初始化：检查登录状态及获取数据
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
-        router.push('/login');
-      } else {
+      if (user) {
+        setIsLoggedIn(true);
         setUserNickname(user.user_metadata.full_name || "朋友");
         await fetchLogs();
-        setLoading(false);
       }
+      setLoading(false);
     };
     init();
   }, []);
 
-  // 3. 执行打卡动作
+  // 2. 打卡动作
   const handleWakeUp = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    
+    if (!user) {
+      alert("请先登录后再打卡哦！");
+      router.push('/login');
+      return;
+    }
 
-    const now = new Date();
-    // 生成格式如 "2026-01-11" 的字符串
-    const todayDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const todayDate = getChinaDate(); // 强制使用中国日期
 
     const { error } = await supabase
       .from('wake_up_logs')
-      .insert([{ 
-        user_id: user.id, 
-        wake_date: todayDate 
-      }]);
+      .insert([{ user_id: user.id, wake_date: todayDate }]);
 
     if (error) {
       if (error.code === '23505') {
@@ -86,13 +99,16 @@ export default function WakeUpPage() {
     } else {
       setHasWoken(true);
       setStatus(`早安，${userNickname}！打卡成功。`);
-      fetchLogs(); // 刷新图表
+      fetchLogs();
     }
   };
 
-  // 4. 注销登录
   const handleLogout = async () => {
     await supabase.auth.signOut();
+    setIsLoggedIn(false);
+    setUserNickname("朋友");
+    setHasWoken(false);
+    setChartData([]);
     router.push('/login');
   };
 
@@ -100,21 +116,18 @@ export default function WakeUpPage() {
 
   return (
     <main className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4">
-      {/* 顶部退出按钮 */}
-      <div className="w-full max-w-md flex justify-end mb-4">
-        <button 
-          onClick={handleLogout}
-          className="text-sm font-medium text-gray-400 hover:text-red-400 flex items-center gap-1 transition-colors"
-        >
-          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-          </svg>
-          退出登录
-        </button>
-      </div>
+      {isLoggedIn && (
+        <div className="w-full max-w-md flex justify-end mb-4">
+          <button onClick={handleLogout} className="text-sm font-medium text-gray-400 hover:text-red-400 flex items-center gap-1 transition-colors">
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+            </svg>
+            退出登录
+          </button>
+        </div>
+      )}
 
       <div className="w-full max-w-md bg-white rounded-3xl shadow-xl p-8 space-y-8">
-        {/* 头部展示区 */}
         <div className="text-center">
           <h1 className="text-3xl font-extrabold text-yellow-500 tracking-tight">醒了么</h1>
           <p className="text-gray-400 mt-1 font-bold">你好，{userNickname} 👋</p>
@@ -122,7 +135,6 @@ export default function WakeUpPage() {
           <p className="text-gray-600 font-medium">{status}</p>
         </div>
 
-        {/* 打卡大按钮 */}
         <div className="flex justify-center">
           <button 
             onClick={handleWakeUp}
@@ -137,10 +149,9 @@ export default function WakeUpPage() {
           </button>
         </div>
 
-        {/* 趋势图表区 */}
         <div className="pt-6 border-t border-gray-50">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest">最近 7 天起床趋势</h3>
+            <h3 className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">最近 7 天起床趋势 (北京时间)</h3>
             <span className="text-[10px] text-gray-300">单位：点钟</span>
           </div>
           <div className="h-44 w-full">
@@ -154,19 +165,12 @@ export default function WakeUpPage() {
                     contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
                     formatter={(value: any) => [`${value ?? '0'} 点`, '起床时间']}
                   />
-                  <Line 
-                    type="monotone" 
-                    dataKey="time" 
-                    stroke="#f59e0b" 
-                    strokeWidth={4} 
-                    dot={{ fill: '#f59e0b', strokeWidth: 2, r: 4, stroke: '#fff' }}
-                    activeDot={{ r: 6, strokeWidth: 0 }}
-                  />
+                  <Line type="monotone" dataKey="time" stroke="#f59e0b" strokeWidth={4} dot={{ fill: '#f59e0b', strokeWidth: 2, r: 4, stroke: '#fff' }} activeDot={{ r: 6, strokeWidth: 0 }} />
                 </LineChart>
               </ResponsiveContainer>
             ) : (
               <div className="h-full flex items-center justify-center text-gray-300 text-sm italic">
-                暂无历史数据，明天也要准时起床哦
+                登录后查看你的早起足迹
               </div>
             )}
           </div>

@@ -152,7 +152,7 @@ export default function WakeUpPage() {
                   <YAxis domain={[4, 12]} hide />
                   <Tooltip 
                     contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                    formatter={(value: number | string) => [`${value} 点`, '起床时间']}
+                    formatter={(value: any) => [`${value ?? '0'} 点`, '起床时间']}
                   />
                   <Line 
                     type="monotone" 
